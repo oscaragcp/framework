@@ -169,6 +169,30 @@ class Builder
     protected $backups = [];
 
     /**
+     * These are the fields that we backup when doing counts.
+     *
+     * @var array
+     */
+    protected $backupFields = ['orders', 'limit', 'offset', 'columns'];
+
+    /**
+     * These are additional fields we backup when doing counts with groups.
+     *
+     * @var array
+     */
+    protected $backupMoreFields = [
+        'from',
+        'groups',
+        'havings',
+        'joins',
+        'unionLimit',
+        'unionOffset',
+        'unionOrders',
+        'unions',
+        'wheres'
+    ];
+
+    /**
      * All of the available clause operators.
      *
      * @var array
@@ -1139,11 +1163,9 @@ class Builder
      */
     public function orderByRaw($sql, $bindings = [])
     {
-        $property = $this->unions ? 'unionOrders' : 'orders';
-
         $type = 'raw';
 
-        $this->{$property}[] = compact('type', 'sql');
+        $this->orders[] = compact('type', 'sql');
 
         $this->addBinding($bindings, 'order');
 
@@ -1321,7 +1343,7 @@ class Builder
      * @param  string  $column
      * @return mixed
      *
-     * @deprecated since version 5.1.
+     * @deprecated since version 5.1
      */
     public function pluck($column)
     {
@@ -1429,31 +1451,34 @@ class Builder
      */
     public function getCountForPagination($columns = ['*'])
     {
-        $this->backupFieldsForCount();
-
-        $this->aggregate = ['function' => 'count', 'columns' => $columns];
-
-        $results = $this->get();
-
-        $this->aggregate = null;
-
-        $this->restoreFieldsForCount();
-
-        if (isset($this->groups)) {
-            return count($results);
+        if ($grouped = isset($this->groups)) {
+            $selectSql = $this->toSql();
         }
 
-        return isset($results[0]) ? (int) array_change_key_case((array) $results[0])['aggregate'] : 0;
+        $this->backupFieldsForCount($grouped);
+
+        if ($grouped) {
+            $this->from = $this->raw("({$selectSql}) subquery");
+        }
+
+        $total = $this->count($columns);
+
+        $this->restoreFieldsForCount($grouped);
+
+        return $total;
     }
 
     /**
      * Backup some fields for the pagination count.
      *
+     * @param  bool  $grouped
      * @return void
      */
-    protected function backupFieldsForCount()
+    protected function backupFieldsForCount($grouped = false)
     {
-        foreach (['orders', 'limit', 'offset', 'columns'] as $field) {
+        $fields = $grouped ? array_merge($this->backupFields, $this->backupMoreFields) : $this->backupFields;
+
+        foreach ($fields as $field) {
             $this->backups[$field] = $this->{$field};
 
             $this->{$field} = null;
@@ -1463,11 +1488,14 @@ class Builder
     /**
      * Restore some fields after the pagination count.
      *
+     * @param  bool  $grouped
      * @return void
      */
-    protected function restoreFieldsForCount()
+    protected function restoreFieldsForCount($grouped = false)
     {
-        foreach (['orders', 'limit', 'offset', 'columns'] as $field) {
+        $fields = $grouped ? array_merge($this->backupFields, $this->backupMoreFields) : $this->backupFields;
+
+        foreach ($fields as $field) {
             $this->{$field} = $this->backups[$field];
         }
 
